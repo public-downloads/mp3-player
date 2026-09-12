@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Folder Player</title>
+<style>
+  :root{
+    --ink:#12161c;
+    --panel:#1a2029;
+    --line:#2a3341;
+    --text:#e6e9ee;
+    --dim:#8d99aa;
+    --live:#6fd3b8;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--ink);
+    color:var(--text);
+    font-family:"Avenir Next","Segoe UI",system-ui,sans-serif;
+    display:flex;flex-direction:column;
+    padding-top:env(safe-area-inset-top);
+  }
+
+  header{padding:18px 18px 12px}
+  h1{
+    margin:0;font-size:20px;font-weight:600;letter-spacing:-.01em;
+  }
+  .sub{margin:4px 0 0;font-size:13px;color:var(--dim);line-height:1.5}
+
+  .pick{
+    margin:14px 18px 0;display:block;
+    border:1px dashed var(--line);border-radius:12px;
+    padding:14px;text-align:center;font-size:15px;color:var(--text);
+    background:var(--panel);cursor:pointer;
+  }
+  .pick:active{border-color:var(--live)}
+  input[type=file]{display:none}
+
+  ul{list-style:none;margin:14px 0 0;padding:0 0 200px;flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch}
+  li{
+    display:flex;gap:12px;align-items:baseline;
+    padding:12px 18px;border-top:1px solid var(--line);
+    font-size:15px;line-height:1.35;
+  }
+  li .n{color:var(--dim);font-size:12px;min-width:26px;font-variant-numeric:tabular-nums}
+  li .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  li.on{background:var(--panel)}
+  li.on .t{color:var(--live)}
+  li.on .n::after{content:"▸"}
+  li.on .n{color:var(--live);font-size:0}
+  li.bad{opacity:.45}
+  li.bad .t::after{content:" — can't play in Safari";color:#e0876f;font-size:12px}
+  .warn{margin:12px 18px 0;padding:10px 12px;border-radius:10px;background:#2a1f1c;
+        border:1px solid #4a332c;color:#e0876f;font-size:13px;line-height:1.45}
+
+  footer{
+    position:fixed;left:0;right:0;bottom:0;
+    background:rgba(18,22,28,.94);
+    backdrop-filter:blur(14px);
+    border-top:1px solid var(--line);
+    padding:12px 18px calc(14px + env(safe-area-inset-bottom));
+  }
+  .now{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:10px;color:var(--dim)}
+  .now b{color:var(--text);font-weight:500}
+  input[type=range]{width:100%;accent-color:var(--live);margin:0 0 8px}
+  .row{display:flex;align-items:center;gap:8px}
+  button{
+    flex:1;background:var(--panel);color:var(--text);
+    border:1px solid var(--line);border-radius:10px;
+    padding:12px 0;font-size:15px;font-family:inherit;cursor:pointer;
+  }
+  button:active{background:#222b36}
+  button.act{border-color:var(--live);color:var(--live)}
+  .time{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums;display:flex;justify-content:space-between;margin-bottom:2px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Folder Player</h1>
+  <p class="sub">Pick your tracks and they queue up in order. Nothing uploads — files stay on your phone.</p>
+</header>
+
+<label class="pick" for="f">Choose music files</label>
+<input id="f" type="file" accept="audio/*,.mp3,.m4a,.flac,.wav,.ogg,.aac" multiple>
+
+<div id="warn" class="warn" hidden></div>
+<ul id="list"></ul>
+
+<footer hidden id="bar">
+  <div class="now" id="now"></div>
+  <div class="time"><span id="cur">0:00</span><span id="dur">0:00</span></div>
+  <input type="range" id="seek" value="0" min="0" max="1000">
+  <div class="row">
+    <button id="prev">Back</button>
+    <button id="play">Play</button>
+    <button id="next">Next</button>
+    <button id="shuf">Shuffle</button>
+  </div>
+</footer>
+
+<audio id="a"></audio>
+
+<script>
+const a=document.getElementById('a'),list=document.getElementById('list'),bar=document.getElementById('bar');
+const nowEl=document.getElementById('now'),seek=document.getElementById('seek');
+const curEl=document.getElementById('cur'),durEl=document.getElementById('dur'),playBtn=document.getElementById('play');
+let tracks=[],order=[],pos=-1,shuffle=false,seeking=false;
+
+const clean=n=>n.replace(/\.[^.]+$/,'').replace(/_/g,' ');
+const probe=document.createElement('audio');
+const TYPES={mp3:'audio/mpeg',m4a:'audio/mp4',aac:'audio/aac',wav:'audio/wav',
+             flac:'audio/flac',ogg:'audio/ogg',oga:'audio/ogg',opus:'audio/ogg',
+             wma:'audio/x-ms-wma',aiff:'audio/aiff',aif:'audio/aiff'};
+function playable(f){
+  const ext=(f.name.split('.').pop()||'').toLowerCase();
+  const t=f.type||TYPES[ext]||'';
+  if(!t) return true;
+  return probe.canPlayType(t)!=='';
+}
+const fmt=s=>isFinite(s)?Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0'):'0:00';
+
+document.getElementById('f').addEventListener('change',e=>{
+  tracks=[...e.target.files].sort((x,y)=>x.name.localeCompare(y.name,undefined,{numeric:true}));
+  order=tracks.map((_,i)=>i);
+  const bad=tracks.filter(t=>!playable(t)).length;
+  const w=document.getElementById('warn');
+  w.hidden=!bad;
+  if(bad) w.textContent=bad+' of '+tracks.length+" files use a codec Safari can't decode (usually Ogg or Opus). Convert them to MP3 or M4A, or play those in VLC.";
+  render(); if(tracks.length){bar.hidden=false; load(0); a.play().catch(()=>{});}
+});
+
+function render(){
+  list.innerHTML='';
+  tracks.forEach((t,i)=>{
+    const li=document.createElement('li');
+    li.innerHTML=`<span class="n">${i+1}</span><span class="t">${clean(t.name)}</span>`;
+    if(!playable(t)) li.classList.add('bad');
+    li.onclick=()=>{pos=order.indexOf(i);load(i);a.play();};
+    list.appendChild(li);
+  });
+}
+
+function load(i){
+  pos=order.indexOf(i);
+  if(a.src) URL.revokeObjectURL(a.src);
+  a.src=URL.createObjectURL(tracks[i]);
+  nowEl.innerHTML='<b>'+clean(tracks[i].name)+'</b>';
+  [...list.children].forEach((li,k)=>li.classList.toggle('on',k===i));
+  list.children[i]?.scrollIntoView({block:'nearest'});
+  if('mediaSession' in navigator){
+    navigator.mediaSession.metadata=new MediaMetadata({title:clean(tracks[i].name),artist:'Local files'});
+  }
+}
+
+const step=d=>{ if(!tracks.length)return;
+  let p=pos+d; if(p>=order.length)p=0; if(p<0)p=order.length-1;
+  load(order[p]); a.play();
+};
+
+document.getElementById('next').onclick=()=>step(1);
+document.getElementById('prev').onclick=()=>a.currentTime>3?a.currentTime=0:step(-1);
+playBtn.onclick=()=>a.paused?a.play():a.pause();
+document.getElementById('shuf').onclick=e=>{
+  shuffle=!shuffle; e.target.classList.toggle('act',shuffle);
+  const cur=order[pos];
+  order=tracks.map((_,i)=>i);
+  if(shuffle){for(let i=order.length-1;i>0;i--){const j=Math.random()*(i+1)|0;[order[i],order[j]]=[order[j],order[i]];}}
+  pos=order.indexOf(cur);
+};
+
+a.onended=()=>step(1);
+a.onplay=()=>playBtn.textContent='Pause';
+a.onpause=()=>playBtn.textContent='Play';
+a.onloadedmetadata=a.ondurationchange=()=>{durEl.textContent=fmt(a.duration);};
+a.onerror=()=>{nowEl.innerHTML='<b>Skipped '+clean(tracks[order[pos]].name)+'</b> — format not supported';setTimeout(()=>step(1),900);};
+a.ontimeupdate=()=>{
+  if(seeking)return;
+  curEl.textContent=fmt(a.currentTime); durEl.textContent=fmt(a.duration);
+  seek.value=a.duration?a.currentTime/a.duration*1000:0;
+};
+seek.oninput=()=>{seeking=true;curEl.textContent=fmt(seek.value/1000*a.duration);};
+seek.onchange=()=>{a.currentTime=seek.value/1000*a.duration;seeking=false;};
+
+if('mediaSession' in navigator){
+  navigator.mediaSession.setActionHandler('nexttrack',()=>step(1));
+  navigator.mediaSession.setActionHandler('previoustrack',()=>step(-1));
+}
+</script>
+</body>
+</html>
