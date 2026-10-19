@@ -763,7 +763,7 @@ async function sourceFor(it) {
     if (volumeWorks) return { blob };
     // iPhone: decode clips up to 3 minutes so the level can be built in; longer ones play as they are.
     const dur = it.dur || await duration(blob);
-    if (!dur || dur > 180) return { blob, fixed: true };
+    if (!dur || dur > 185) return { blob, fixed: true };  // a little slack: some files read as 3:00.04
     const buf = await new OfflineAudioContext(2, 1, SR).decodeAudioData(await blob.arrayBuffer());
     src = { pcm: interleave(buf.getChannelData(0), buf.getChannelData(buf.numberOfChannels > 1 ? 1 : 0)) };
   }
@@ -951,7 +951,7 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   ]);
   mine = sounds.map(s => ({ ...s, key: 'u:' + s.id, kind: 'mine', icon: ICONS.file }));
   bundled = (Array.isArray(shipped) ? shipped : []).filter(s => s && s.file)
-    .map(s => ({ key: 'f:' + s.file, kind: 'file', url: 'sounds/' + encodeURIComponent(s.file), name: s.name || clean(s.file), icon: ICONS.file }));
+    .map(s => ({ key: 'f:' + s.file, kind: 'file', url: 'sounds/' + encodeURIComponent(s.file), name: s.name || clean(s.file), icon: ICONS[s.icon] || ICONS.file }));
   ambSel = allSounds().find(s => s.key === store.get('amb')) || null;
   renderSounds();
   // Get the last-used sound ready so switching it on is instant.
