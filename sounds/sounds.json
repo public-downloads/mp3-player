@@ -1,1 +1,5 @@
-[]
+[
+  { "name": "Window rain", "file": "rain-window.m4a", "icon": "rain" },
+  { "name": "Forest night", "file": "forest-night.m4a", "icon": "night" },
+  { "name": "Birdsong", "file": "birdsong.m4a", "icon": "birds" }
+]
