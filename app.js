@@ -880,7 +880,7 @@ function pickMusic(target) {
   if (!target && folderOK) openSheet('newSheet'); else $('fFiles').click();
 }
 $('fFiles').onchange = $('fDir').onchange = e => {
-  const files = e.target.files;
+  const files = [...e.target.files]; // copy first: Safari empties the live list when value is reset
   e.target.value = '';
   const s = $('newSheet'); if (!s.hidden) closeSheet(s);
   if (files.length) addFiles(files, pickTarget).catch(() => toast("Couldn't read those files."));
