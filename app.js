@@ -353,8 +353,8 @@ function load(t, at = 0) {
 }
 
 function start() {
-  if (eq.routed) audio(); else eqRoute();
   a.play().catch(() => {});
+  eqSync();
 }
 
 function stopMusic() {
@@ -398,12 +398,8 @@ $('shuf').onclick = () => {
 };
 
 a.onended = () => step(1);
-a.onplay = () => {
-  playBtn.textContent = 'Pause'; fails = 0;
-  if (eq.routed && ctx.state !== 'running') ctx.resume().catch(() => {});
-  session(); position();
-};
-a.onpause = () => { playBtn.textContent = 'Play'; session(); position(); remember(true); relax(); };
+a.onplay = () => { playBtn.textContent = 'Pause'; fails = 0; session(); position(); };
+a.onpause = () => { playBtn.textContent = 'Play'; eqRelease(); session(); position(); remember(true); };
 a.onloadedmetadata = a.ondurationchange = () => {
   if (pendingSeek) { a.currentTime = Math.max(0, Math.min(pendingSeek, a.duration - 1)); pendingSeek = 0; }
   durEl.textContent = fmt(a.duration); position();
@@ -419,9 +415,10 @@ a.ontimeupdate = () => {
   if (seeking) return;
   curEl.textContent = fmt(a.currentTime); durEl.textContent = fmt(a.duration);
   seek.value = a.duration ? a.currentTime / a.duration * 1000 : 0;
+  if (eqLive && Math.abs(eqEl.currentTime - a.currentTime) > 0.15) eqEl.currentTime = a.currentTime;
   remember();
 };
-a.onseeked = () => position();
+a.onseeked = () => { if (eqLive) eqEl.currentTime = a.currentTime; position(); };
 seek.oninput = () => { seeking = true; curEl.textContent = fmt(seek.value / 1000 * a.duration); };
 seek.onchange = () => { a.currentTime = seek.value / 1000 * a.duration; seeking = false; };
 
@@ -463,63 +460,80 @@ if ('mediaSession' in navigator) {
   on('seekto', d => { a.currentTime = d.seekTime; position(); });
 }
 
-// ---------- audio engine (Web Audio) ----------
-// Music plays straight from the <audio> element until the EQ is first switched on;
-// only then is it routed through Web Audio (it stays routed until the app reloads).
-let ctx = null;
-function audio() {
-  if (!ctx) {
-    ctx = new (window.AudioContext || window.webkitAudioContext)();
-    ctx.onstatechange = () => { if (ctx.state !== 'running' && needed() && !document.hidden) ctx.resume().catch(() => {}); };
-  }
-  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
-  if (ctx.state !== 'running') ctx.resume().catch(() => {});
-  return ctx;
-}
-const needed = () => ambOn || (eq.routed && !a.paused);
-function relax() { // let the audio engine sleep once nothing is using it
-  setTimeout(() => { if (ctx && ctx.state === 'running' && !needed()) ctx.suspend().catch(() => {}); }, 1500);
-}
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && ctx && needed() && ctx.state !== 'running') ctx.resume().catch(() => {});
-});
-
 // ---------- equalizer ----------
+// The music always plays from the plain <audio> element, because that is what an iPhone
+// keeps playing with the screen locked. With the EQ on, a twin element plays the same
+// track through Web Audio filters while the plain one is muted. iOS stops Web Audio when
+// the app goes to the background, so there the plain element takes over (no EQ while
+// locked) and the EQ comes back with the first tap after you return.
 const BANDS = [[60, 'peaking', '60'], [170, 'peaking', '170'], [450, 'peaking', '450'],
                [1200, 'peaking', '1.2k'], [3500, 'peaking', '3.5k'], [10000, 'highshelf', '10k']];
 const PRESETS = { Flat: [0, 0, 0, 0, 0, 0], Bass: [6, 4, 1, 0, 0, 0], Treble: [0, 0, 0, 1, 4, 6],
                   Vocal: [-2, -1, 2, 4, 3, 0], Loudness: [5, 2, 0, -1, 2, 5], Soft: [-1, 0, 0, 0, -2, -4] };
 const Q = 0.9;
 const saved = store.get('eq', {});
-const eq = { on: !!saved.on, gains: Array.isArray(saved.gains) ? saved.gains : [...PRESETS.Flat], routed: false, pre: null, nodes: null };
+const eq = { on: !!saved.on, gains: Array.isArray(saved.gains) ? saved.gains : [...PRESETS.Flat] };
 const saveEq = () => store.set('eq', { on: eq.on, gains: eq.gains });
+let eqCtx = null, eqEl = null, eqPre = null, eqNodes = null, eqLive = false, eqStale = false, eqIdle = 0, eqWaiting = false;
+const tapping = () => navigator.userActivation ? navigator.userActivation.isActive : true;
 
-function eqNodes() {
-  if (eq.nodes) return;
-  const c = audio();
-  eq.pre = c.createGain();
-  eq.nodes = BANDS.map(([f, type]) => { const n = c.createBiquadFilter(); n.type = type; n.frequency.value = f; n.Q.value = Q; return n; });
-  eq.nodes.reduce((prev, n) => { prev.connect(n); return n; }, eq.pre).connect(c.destination);
+// A fresh audio engine and twin element. Needs a tap: iOS only starts audio from one.
+function eqBuild() {
+  try { eqCtx?.close(); } catch {}
+  if (eqEl) { eqEl.pause(); eqEl.removeAttribute('src'); }
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
+  eqCtx = new (window.AudioContext || window.webkitAudioContext)();
+  eqEl = new Audio();
+  eqPre = eqCtx.createGain();
+  eqNodes = BANDS.map(([f, type]) => { const n = eqCtx.createBiquadFilter(); n.type = type; n.frequency.value = f; n.Q.value = Q; return n; });
+  eqNodes.reduce((prev, n) => { prev.connect(n); return n; }, eqPre).connect(eqCtx.destination);
+  eqCtx.createMediaElementSource(eqEl).connect(eqPre);
+  eqStale = false;
   eqApply();
 }
-// Routes the music through the EQ, but only once the engine is actually running;
-// routing into a stalled engine would silence the music.
-function eqRoute() {
-  if (!eq.on || eq.routed) return;
-  const c = audio();
-  const go = () => {
-    if (eq.routed || c.state !== 'running') return;
-    eqNodes();
-    try { c.createMediaElementSource(a).connect(eq.pre); eq.routed = true; } catch {}
-  };
-  c.state === 'running' ? go() : c.resume().then(go, () => {});
+
+// Lines the twin up with the plain player and switches over to it, or hands back.
+// The plain element is only muted once the twin is actually playing, so a failure
+// anywhere leaves the music audible, just without EQ.
+function eqSync() {
+  if (!eq.on || a.paused || !current() || (isIOS && document.hidden)) return eqRelease();
+  if (!eqCtx || eqStale) {
+    if (!tapping()) return eqRelease();
+    try { eqBuild(); } catch { return eqRelease(); }
+  }
+  clearTimeout(eqIdle);
+  if (eqCtx.state !== 'running') eqCtx.resume().catch(() => {});
+  if (eqEl.src !== a.src) eqEl.src = a.src;
+  eqEl.currentTime = a.currentTime;
+  const el = eqEl;
+  el.play().then(() => {
+    if (el !== eqEl || !eq.on || a.paused || eqCtx.state !== 'running' || (isIOS && document.hidden)) return eqRelease();
+    if (Math.abs(el.currentTime - a.currentTime) > 0.1) el.currentTime = a.currentTime;
+    a.muted = true; eqLive = true;
+  }, () => eqRelease());
 }
+
+function eqRelease() {
+  a.muted = false; eqLive = false;
+  eqEl?.pause();
+  clearTimeout(eqIdle);
+  eqIdle = setTimeout(() => { if (!eqLive && eqCtx?.state === 'running') eqCtx.suspend().catch(() => {}); }, 2000);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!isIOS || !eq.on) return;
+  if (document.hidden) { eqRelease(); eqStale = true; return; }
+  if (eqWaiting) return;
+  eqWaiting = true;
+  document.addEventListener('click', () => { eqWaiting = false; eqSync(); }, { once: true, capture: true });
+});
+
 function eqApply() {
-  if (!eq.nodes) return;
-  const g = eq.on ? eq.gains : eq.gains.map(() => 0), t = ctx.currentTime;
-  eq.nodes.forEach((n, i) => n.gain.setTargetAtTime(g[i], t, 0.03));
+  if (!eqNodes) return;
+  const g = eq.on ? eq.gains : eq.gains.map(() => 0), t = eqCtx.currentTime;
+  eqNodes.forEach((n, i) => n.gain.setTargetAtTime(g[i], t, 0.03));
   // Pull the level down by the biggest boost so boosted bands don't clip.
-  eq.pre.gain.setTargetAtTime(Math.pow(10, -Math.max(0, ...g) / 20), t, 0.03);
+  eqPre.gain.setTargetAtTime(Math.pow(10, -Math.max(0, ...g) / 20), t, 0.03);
 }
 
 // Biquad magnitude in dB (RBJ cookbook, as Web Audio implements it), for the curve.
@@ -599,7 +613,7 @@ function paintEq() {
 
 function eqToggle(on) {
   eq.on = on; saveEq();
-  if (on) { eqNodes(); eqRoute(); }
+  if (on) eqSync(); else eqRelease();
   eqApply(); paintEq();
 }
 $('eqTog').onclick = () => eqToggle(!eq.on);
@@ -625,65 +639,65 @@ const BUILTIN = [['rain', 'Rain'], ['car', 'Car rain'], ['storm', 'Storm'], ['wa
 let bundled = [], mine = [];
 const allSounds = () => [...BUILTIN, ...bundled, ...mine];
 
-const FADE = 0.8, SR = 44100;
-let master = null, voice = null, ambOn = false, ambSel = null, ambJob = 0, ambBusy = null;
+// Ambience plays from its own looping <audio> element rather than Web Audio, so it keeps
+// going with the screen locked. Built-in sounds are rendered to a WAV first. iPhones
+// ignore an element's volume, so there the level is built into the WAV itself (short
+// uploaded clips are decoded so the same works for them); elsewhere the slider simply
+// sets the element's volume.
+const SR = 44100;
+let ambOn = false, ambSel = null, ambJob = 0, ambBusy = null;
 let level = store.get('ambLevel', 50);
-const gainOf = v => 1.5 * (v / 100) ** 2;
-
-// A few seconds of silence on a plain <audio> element, played whenever ambience is on.
-// On iOS a playing media element is what keeps Web Audio going with the screen locked
-// and the ringer switch on silent.
-function silence() {
-  const rate = 8000, n = rate * 10, v = new DataView(new ArrayBuffer(44 + n));
-  const str = (o, s) => [...s].forEach((ch, i) => v.setUint8(o + i, ch.charCodeAt(0)));
-  str(0, 'RIFF'); v.setUint32(4, 36 + n, true); str(8, 'WAVEfmt ');
-  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
-  v.setUint32(24, rate, true); v.setUint32(28, rate, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true);
-  str(36, 'data'); v.setUint32(40, n, true);
-  for (let i = 0; i < n; i++) v.setUint8(44 + i, 128);
-  return URL.createObjectURL(new Blob([v.buffer], { type: 'audio/wav' }));
-}
-const SILENCE = silence();
-const keep = new Audio(SILENCE); keep.loop = true;
-// Long sound files stream through this element instead of being decoded into memory.
+const gainOf = v => Math.pow(v / 100, 1.6);
+const volumeWorks = !isIOS && (() => { const t = new Audio(); t.volume = 0.5; return t.volume === 0.5; })();
 const ambEl = new Audio(); ambEl.loop = true;
-let ambGain = null, ambPrimed = false;
+let ambKey = null, ambSrc = null, ambUrl = null, ambPrimed = false, ambNoted = false, fadeTimer = 0;
 
-// Must run inside a tap: iOS only starts audio from a user gesture.
-function unlock() {
-  const c = audio();
-  if (!master) {
-    master = c.createGain(); master.gain.value = gainOf(level); master.connect(c.destination);
-    ambGain = c.createGain(); ambGain.gain.value = 0; ambGain.connect(master);
-    c.createMediaElementSource(ambEl).connect(ambGain);
+// 16-bit stereo WAV from interleaved samples, scaled by gain (at most 1).
+function wav(pcm, gain) {
+  const n = pcm.length, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); str(8, 'WAVEfmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 2, true);
+  v.setUint32(24, SR, true); v.setUint32(28, SR * 4, true); v.setUint16(32, 4, true); v.setUint16(34, 16, true);
+  str(36, 'data'); v.setUint32(40, n * 2, true);
+  const out = new Int16Array(buf, 44, n);
+  if (gain >= 1) out.set(pcm); else for (let i = 0; i < n; i++) out[i] = pcm[i] * gain;
+  return new Blob([buf], { type: 'audio/wav' });
+}
+
+function interleave(l, r) {
+  const out = new Int16Array(l.length * 2);
+  for (let i = 0, j = 0; i < l.length; i++) {
+    out[j++] = Math.max(-1, Math.min(1, l[i])) * 32767;
+    out[j++] = Math.max(-1, Math.min(1, r[i])) * 32767;
   }
-  keep.play().catch(() => {});
-  if (!ambPrimed) { ambPrimed = true; ambEl.src = SILENCE; ambEl.play().then(() => ambEl.pause(), () => {}); }
+  return out;
 }
 
-function fade(g, from, to) {
-  const p = g.gain, t = ctx.currentTime;
-  p.cancelScheduledValues(t);
-  p.setValueAtTime(from ?? p.value, t);
-  p.linearRampToValueAtTime(to, t + FADE);
+const SILENCE = URL.createObjectURL(wav(new Int16Array(SR / 5), 1));
+
+// Smooth volume change where the platform allows one; elsewhere it just finishes.
+function ramp(to, done) {
+  clearInterval(fadeTimer);
+  if (!volumeWorks) return done?.();
+  const from = ambEl.volume, t0 = performance.now();
+  fadeTimer = setInterval(() => {
+    const x = Math.min(1, (performance.now() - t0) / 600);
+    ambEl.volume = from + (to - from) * x;
+    if (x === 1) { clearInterval(fadeTimer); done?.(); }
+  }, 30);
 }
 
-function bufferVoice(buf) {
-  const src = ctx.createBufferSource(), g = ctx.createGain();
-  src.buffer = buf; src.loop = true;
-  src.connect(g).connect(master);
-  fade(g, 0, 1); src.start();
-  return { stop() { fade(g, null, 0); setTimeout(() => { try { src.stop(); } catch {} g.disconnect(); }, FADE * 1000 + 100); } };
-}
-
-function streamVoice(blob) {
-  const url = URL.createObjectURL(blob);
-  ambEl.src = url;
-  const done = () => { if (ambEl.src === url) { ambEl.pause(); ambEl.removeAttribute('src'); } URL.revokeObjectURL(url); };
-  return ambEl.play().then(() => {
-    fade(ambGain, 0, 1);
-    return { stream: true, stop(now) { if (now) return done(); fade(ambGain, null, 0); setTimeout(done, FADE * 1000 + 100); } };
-  }, err => { done(); throw err; });
+// Puts a source on the ambience element; keepTime carries on from the same spot.
+function ambPlay(src, keepTime) {
+  const t = keepTime ? ambEl.currentTime : 0, old = ambUrl;
+  ambSrc = src;
+  ambUrl = URL.createObjectURL(src.pcm ? wav(src.pcm, volumeWorks ? 1 : gainOf(level)) : src.blob);
+  ambEl.src = ambUrl;
+  if (t) ambEl.addEventListener('loadedmetadata', () => { ambEl.currentTime = t; }, { once: true });
+  if (volumeWorks && !keepTime) ambEl.volume = 0;
+  if (old) URL.revokeObjectURL(old);
+  return ambEl.play().then(() => { if (!keepTime) ramp(gainOf(level)); });
 }
 
 // Built-in sounds are rendered in a worker (or here, if workers can't start, e.g. file://).
@@ -734,26 +748,28 @@ function duration(blob) {
   });
 }
 
-const buffers = new Map(); // decoded loops, most recent last
+// {pcm}: full-level samples to build a WAV from, or {blob}: a file to play as it is.
+const sources = new Map(); // recent ones, most recent last
 async function sourceFor(it) {
-  if (buffers.has(it.key)) { const b = buffers.get(it.key); buffers.delete(it.key); buffers.set(it.key, b); return b; }
-  let buf;
+  if (sources.has(it.key)) { const s = sources.get(it.key); sources.delete(it.key); sources.set(it.key, s); return s; }
+  let src;
   if (it.kind === 'synth') {
     const [l, r] = await renderPCM(it.id);
     pcm.delete(it.id);
-    buf = ctx.createBuffer(2, l.length, SR);
-    buf.getChannelData(0).set(l); buf.getChannelData(1).set(r);
+    src = { pcm: interleave(l, r) };
   } else {
     const blob = it.blob || (it.kind === 'mine' ? await db.file('s' + it.id) : await fetch(it.url).then(r => { if (!r.ok) throw new Error(r.status); return r.blob(); }));
     if (!blob) throw new Error('missing');
-    const dur = it.dur ?? await duration(blob);
-    // Short clips are decoded so they loop without a gap; long ones stream.
-    if (dur ? dur > 150 : blob.size > 2.5e6) return blob;
-    buf = await ctx.decodeAudioData(await blob.arrayBuffer());
+    if (volumeWorks) return { blob };
+    // iPhone: decode clips up to 3 minutes so the level can be built in; longer ones play as they are.
+    const dur = it.dur || await duration(blob);
+    if (!dur || dur > 180) return { blob, fixed: true };
+    const buf = await new OfflineAudioContext(2, 1, SR).decodeAudioData(await blob.arrayBuffer());
+    src = { pcm: interleave(buf.getChannelData(0), buf.getChannelData(buf.numberOfChannels > 1 ? 1 : 0)) };
   }
-  buffers.set(it.key, buf);
-  while (buffers.size > 3) buffers.delete(buffers.keys().next().value);
-  return buf;
+  sources.set(it.key, src);
+  while (sources.size > 3) sources.delete(sources.keys().next().value);
+  return src;
 }
 
 async function startVoice() {
@@ -762,11 +778,11 @@ async function startVoice() {
   try {
     const src = await sourceFor(it);
     if (job !== ambJob) return;
-    const old = voice;
-    if (src instanceof AudioBuffer) { voice = bufferVoice(src); old?.stop(); }
-    else { old?.stop(true); voice = null; voice = await streamVoice(src); if (job !== ambJob) { voice.stop(); voice = null; } }
+    ambKey = it.key;
+    await ambPlay(src, false);
+    if (src.fixed && !ambNoted) { ambNoted = true; toast('On iPhone, sound files longer than 3 minutes play at their own volume.'); }
   } catch {
-    if (job === ambJob) { ambOn = false; keep.pause(); toast(`Couldn't play ${it.name}.`); session(); }
+    if (job === ambJob) { ambOn = false; ambEl.pause(); toast(`Couldn't play ${it.name}.`); session(); }
   } finally {
     if (ambBusy === it.key) ambBusy = null;
     paintAmb();
@@ -774,18 +790,24 @@ async function startVoice() {
 }
 
 function ambStart(it) {
-  unlock(); held = null;
+  held = null;
+  // iOS lets an element start playing only from a tap; once it has, it may start again later.
+  if (!ambPrimed) { ambPrimed = true; ambEl.src = SILENCE; ambEl.play().catch(() => {}); }
   ambSel = it; ambOn = true;
   store.set('amb', it.key);
   paintAmb(); session();
+  if (ambKey === it.key && ambUrl) {   // same sound as before: just carry on
+    if (volumeWorks) ambEl.volume = 0;
+    ambEl.play().then(() => ramp(gainOf(level)), () => startVoice());
+    return;
+  }
   startVoice();
 }
 
 function ambStop() {
   ambOn = false; ambJob++;
-  voice?.stop(); voice = null;
-  keep.pause();
-  paintAmb(); session(); relax();
+  ramp(0, () => { if (!ambOn) ambEl.pause(); });
+  paintAmb(); session();
 }
 
 function paintAmb() {
@@ -827,7 +849,8 @@ function renderSounds() {
     x.onclick = async () => {
       if (!confirm(`Remove “${it.name}” from this device?`)) return;
       if (ambSel?.key === it.key) { if (ambOn) ambStop(); ambSel = null; store.set('amb', null); }
-      mine = mine.filter(m => m !== it); buffers.delete(it.key);
+      mine = mine.filter(m => m !== it); sources.delete(it.key);
+      if (ambKey === it.key) ambKey = null;
       renderSounds(); paintAmb();
       if (it.id > 0) db.del('sounds', [it.id], 's').catch(() => {});
     };
@@ -859,8 +882,10 @@ const lvl = $('ambLevel');
 lvl.value = level;
 lvl.oninput = () => {
   level = +lvl.value; store.set('ambLevel', level);
-  if (master) master.gain.setTargetAtTime(gainOf(level), ctx.currentTime, 0.05);
+  if (volumeWorks) { clearInterval(fadeTimer); ambEl.volume = gainOf(level); }
 };
+// iPhone: the level is part of the WAV, so it's rebuilt once the slider is let go.
+lvl.onchange = () => { if (!volumeWorks && ambOn && ambSrc?.pcm) ambPlay(ambSrc, true).catch(() => {}); };
 $('ambTog').onclick = () => ambOn ? ambStop() : ambSel ? ambStart(ambSel) : openSheet('ambSheet');
 $('ambOpen').onclick = () => openSheet('ambSheet');
 
