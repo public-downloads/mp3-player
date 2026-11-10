@@ -13,16 +13,26 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <title>Folder Player</title>
 <style>
+  /* The Mint theme. themes.js swaps these for the theme that's picked. */
   :root{
     --ink:#12161c;
     --panel:#1a2029;
     --press:#222b36;
     --line:#2a3341;
+    --line2:#3a4658;
     --text:#e6e9ee;
     --dim:#8d99aa;
     --live:#6fd3b8;
     --livebg:#1c3530;
+    --okline:#2f5a50;
     --hot:#e0876f;
+    --warnbg:#2a1f1c;
+    --warnline:#4a332c;
+    --raise:#28313d;
+    --ink-rgb:18,22,28;
+    --scrim:rgba(0,0,0,.55);
+    --shadow:0 6px 24px rgba(0,0,0,.35);
+    color-scheme:dark;
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   [hidden]{display:none!important}
@@ -43,7 +53,7 @@
   h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-.01em;flex:1}
   .sub{margin:4px 0 0;font-size:13px;color:var(--dim);line-height:1.5}
   .pill{font-size:11px;padding:3px 9px;border-radius:99px;border:1px solid var(--line);color:var(--dim);white-space:nowrap}
-  .pill.ok{color:var(--live);border-color:#2f5a50}
+  .pill.ok{color:var(--live);border-color:var(--okline)}
   .tip{margin:10px 0 0;padding:9px 34px 9px 12px;border-radius:10px;background:var(--panel);border:1px solid var(--line);
        font-size:13px;line-height:1.45;color:var(--dim);position:relative}
   .tip b{color:var(--text);font-weight:500}
@@ -57,6 +67,8 @@
   .chip:active{background:var(--press)}
   .chip.act{border-color:var(--live);color:var(--live)}
   .chip.danger{color:var(--hot)}
+  .chip.icon{display:grid;place-items:center;width:32px;height:32px;padding:0}
+  .chip.icon svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 
   .tabs{display:flex;gap:8px;padding:0 18px 10px;overflow-x:auto;scrollbar-width:none;flex:none}
   .tabs::-webkit-scrollbar{display:none}
@@ -65,16 +77,36 @@
     background:none;border:1px solid var(--line);border-radius:99px;
     padding:7px 14px;font-size:14px;color:var(--dim);
   }
-  .tab.on{background:var(--panel);color:var(--text);border-color:#3a4658}
+  .tab.on{background:var(--panel);color:var(--text);border-color:var(--line2)}
   .tab.playing::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--live);margin:0 7px 2px 0;vertical-align:middle}
   .tab.add{color:var(--live);border-style:dashed}
+  /* "All" sits left of the strip and stays put while the tabs scroll */
+  .tabrow{display:flex;flex:none;min-width:0}
+  .tabrow .tabs{flex:1;min-width:0}
+  .tab.all{color:var(--live);margin:0 0 10px 18px}
+  .tab.all:not([hidden]) + .tabs{padding-left:8px;
+    -webkit-mask-image:linear-gradient(to right,transparent,#000 14px);mask-image:linear-gradient(to right,transparent,#000 14px)}
+  @media (hover:hover) and (pointer:fine){
+    .tabs{scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+  }
   .tab .pen{width:13px;height:13px;margin:0 0 -1px 6px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;opacity:.5}
   /* 16px stops iOS zooming in on focus; iOS also needs text selection back on to type */
   input.tab.rename{font:inherit;font-size:16px;color:var(--text);background:var(--panel);border-color:var(--live);outline:none;
                    width:12em;padding:6px 14px;-webkit-user-select:text;user-select:text}
 
   .plbar{display:flex;align-items:center;gap:8px;padding:0 18px 10px;flex:none;font-size:12px;color:var(--dim)}
-  #plinfo{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* tapping the playlist's size opens its About sheet */
+  #plinfo{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;
+          background:none;border:0;padding:6px 0;text-align:left;font-size:12px;color:var(--dim)}
+  #plinfo::after{content:" ›"}
+  .plnote{flex:none;margin:-4px 18px 10px;font-size:13px;line-height:1.45;color:var(--dim);white-space:pre-line;cursor:pointer;
+          display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  /* list or covers */
+  .seg{flex:none;display:flex;padding:2px;border:1px solid var(--line);border-radius:99px;background:var(--panel)}
+  .seg button{display:flex;background:none;border:0;border-radius:99px;padding:4px 9px;color:var(--dim)}
+  .seg button[aria-pressed=true]{background:var(--press);color:var(--live)}
+  .seg svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .chip:disabled{opacity:.45;cursor:default}
 
   .empty{padding:0 18px}
   .pick{
@@ -86,36 +118,79 @@
   .pick:active{border-color:var(--live)}
   .pick small{display:block;margin-top:3px;font-size:12px;color:var(--dim)}
   input[type=file]{display:none}
-  .warn{margin:0 18px 10px;padding:10px 12px;border-radius:10px;background:#2a1f1c;flex:none;
-        border:1px solid #4a332c;color:var(--hot);font-size:13px;line-height:1.45}
+  .warn{margin:0 18px 10px;padding:10px 12px;border-radius:10px;background:var(--warnbg);flex:none;
+        border:1px solid var(--warnline);color:var(--hot);font-size:13px;line-height:1.45}
 
-  #list{list-style:none;margin:0;padding:0 0 12px;flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
-  #list li{
+  /* the songs: #list, and #sideList in the second pane */
+  :is(#list,#sideList){list-style:none;margin:0;padding:0 0 12px;flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+  :is(#list,#sideList) li{
     display:flex;gap:12px;align-items:baseline;
     padding:12px 18px;border-top:1px solid var(--line);
     font-size:15px;line-height:1.35;
   }
-  #list li .n{color:var(--dim);font-size:12px;min-width:26px;font-variant-numeric:tabular-nums}
-  #list li .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
-  #list li.on{background:var(--panel)}
-  #list li.on .t{color:var(--live)}
-  #list li.on .n::after{content:"▸";font-size:12px}
-  #list li.on .n{color:var(--live);font-size:0}
-  #list li.bad{opacity:.45}
-  #list li.bad .t::after{content:" — can't play here";color:var(--hot);font-size:12px}
-  #list li.none{color:var(--dim);font-size:14px}
+  :is(#list,#sideList) li .n{color:var(--dim);font-size:12px;min-width:26px;font-variant-numeric:tabular-nums}
+  :is(#list,#sideList) li .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  /* the name, and with song details on, a line of artist, album, format and bitrate under it */
+  :is(#list,#sideList) li .tx{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+  :is(#list,#sideList) li .i{font-size:12px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  :is(#list,#sideList) li .i:empty{display:none}
+  /* the vibe label is a button with a bigger tap area than it looks */
+  :is(#list,#sideList) li .v{flex:none;background:none;border:0;font-size:12px;color:var(--dim);padding:10px 0 10px 12px;margin:-10px 0}
+  :is(#list,#sideList) li .v.set{color:var(--text)}
+  :is(#list,#sideList) li.on{background:var(--panel)}
+  :is(#list,#sideList) li.on .t{color:var(--live)}
+  :is(#list,#sideList) li.on .n::after{content:"▸";font-size:12px}
+  :is(#list,#sideList) li.on .n{color:var(--live);font-size:0}
+  :is(#list,#sideList) li.bad{opacity:.45}
+  :is(#list,#sideList) li.bad .t::after{content:" — can't play here";color:var(--hot);font-size:12px}
+  :is(#list,#sideList) li.none{color:var(--dim);font-size:14px}
   #list .rm{flex:none;background:none;border:0;color:var(--hot);font-size:13px;padding:0}
+
+  /* a cover: one picture, four in a square (playlists), or a tinted square with a note when there's none */
+  .art{position:relative;aspect-ratio:1;border-radius:10px;overflow:hidden;background:var(--panel);--h:210}
+  .art img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none;-webkit-user-drag:none}
+  .art.four img{width:50%;height:50%}
+  .art.four img:nth-child(2){left:50%}
+  .art.four img:nth-child(3){top:50%}
+  .art.four img:nth-child(4){left:50%;top:50%}
+  .art.none{background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-opacity='.45' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 18V5l12-2v13'/%3E%3Ccircle cx='6' cy='18' r='3'/%3E%3Ccircle cx='18' cy='16' r='3'/%3E%3C/svg%3E") center/34% no-repeat,
+                    linear-gradient(140deg,hsl(var(--h) 32% 28%),hsl(calc(var(--h) + 50) 30% 15%))}
+
+  /* the covers view of a playlist */
+  #list.covers{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:18px 12px;padding:4px 18px 16px;align-content:start}
+  #list.covers li{display:block;position:relative;min-width:0;padding:0;border:0;font-size:14px;cursor:pointer;-webkit-touch-callout:none}
+  #list.covers li.on{background:none}
+  #list.covers li .t{display:block;margin-top:8px}
+  #list.covers .s{display:flex;align-items:baseline;gap:6px;min-height:17px;font-size:12px;color:var(--dim)}
+  #list.covers .ar{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #list.covers li .v{padding:8px 0 8px 6px;margin:-8px 0}
+  #list.covers li .i{display:block;margin-top:1px;font-size:11px}
+  #list.covers li.on .art{box-shadow:0 0 0 2px var(--live)}
+  /* the playing badge: an accent circle (::after) with a play triangle in the background colour on top (::before) */
+  #list.covers li.on .art::after{content:"";position:absolute;left:8px;bottom:8px;width:26px;height:26px;border-radius:50%;background:var(--live)}
+  #list.covers li.on .art::before{content:"";position:absolute;z-index:1;left:14px;bottom:14px;width:14px;height:14px;
+    background:var(--ink);-webkit-clip-path:polygon(33% 23%,33% 77%,77% 50%);clip-path:polygon(33% 23%,33% 77%,77% 50%)}
+  #list.covers li.bad .t::after{content:none}
+  #list.covers li.bad .s>*{display:none}
+  #list.covers li.bad .s::before{content:"Can't play here";color:var(--hot)}
+  #list.covers li.none{grid-column:1/-1;padding:12px 0}
+  #list.covers .rm{position:absolute;top:6px;right:6px;width:30px;height:30px;border-radius:50%;font-size:20px;line-height:1;
+    background:rgba(var(--ink-rgb),.82);border:1px solid var(--line)}
 
   footer{
     flex:none;
-    background:rgba(18,22,28,.94);
+    background:rgba(var(--ink-rgb),.94);
     backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
     border-top:1px solid var(--line);
     padding:12px 18px calc(12px + env(safe-area-inset-bottom));
   }
   .nowrow{display:flex;align-items:center;gap:10px;margin-bottom:8px}
-  .now{flex:1;min-width:0;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
+  /* the song playing; tapping it opens its details */
+  .now{flex:1;min-width:0;display:block;background:none;border:0;padding:0;text-align:left;font-size:14px;color:var(--dim)}
+  .now>*{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .now b{color:var(--text);font-weight:500}
+  .now small{margin-top:2px;font-size:11px}
+  .now small:empty{display:none}
   input[type=range]{width:100%;accent-color:var(--live);margin:0 0 8px}
   .row{display:flex;align-items:center;gap:8px}
   .row button{
@@ -127,6 +202,12 @@
   .row button.act{border-color:var(--live);color:var(--live)}
   .time{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums;display:flex;justify-content:space-between;margin-bottom:2px}
 
+  /* the volume of everything; the speaker mutes */
+  .vol{display:flex;align-items:center;gap:12px;margin:0 0 12px}
+  .has-music .vol{margin:12px 0 0}
+  .vol input[type=range]{flex:1;min-width:0;margin:0}
+  .vol .chip.icon{border:0;background:none;color:var(--dim)}
+  .vol[data-l="0"] .w1,.vol[data-l="0"] .w2,.vol[data-l="1"] .w2,.vol:not([data-l="0"]) .mx{display:none}
   .amb{display:flex;align-items:center;gap:14px}
   .has-music .amb{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
   .ambname{flex:none;max-width:38%;background:none;border:0;padding:2px 0;text-align:left;display:flex;flex-direction:column;line-height:1.3}
@@ -144,11 +225,11 @@
   .switch[aria-checked=true]::after{transform:translateX(20px);background:var(--live)}
 
   .toast{position:fixed;left:50%;top:calc(env(safe-area-inset-top) + 12px);transform:translateX(-50%);z-index:20;
-         max-width:calc(100% - 32px);padding:9px 14px;border-radius:12px;background:#28313d;border:1px solid #3a4658;
-         font-size:13px;line-height:1.4;box-shadow:0 6px 24px rgba(0,0,0,.35);pointer-events:none}
+         max-width:calc(100% - 32px);padding:9px 14px;border-radius:12px;background:var(--raise);border:1px solid var(--line2);
+         font-size:13px;line-height:1.4;box-shadow:var(--shadow);pointer-events:none}
 
   .sheet{position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;justify-content:flex-end}
-  .scrim{position:absolute;inset:0;background:rgba(0,0,0,.55);opacity:0;transition:opacity .25s}
+  .scrim{position:absolute;inset:0;background:var(--scrim);opacity:0;transition:opacity .25s}
   .panel{position:relative;max-height:88dvh;overflow-y:auto;overscroll-behavior:contain;
          background:var(--ink);border-top:1px solid var(--line);border-radius:18px 18px 0 0;
          padding:8px 18px calc(20px + env(safe-area-inset-bottom));
@@ -157,7 +238,7 @@
   .sheet.open .panel{transform:none}
   .grab{width:36px;height:4px;border-radius:2px;background:var(--line);margin:2px auto 12px}
   .head{display:flex;align-items:center;gap:10px}
-  .head h2{margin:0;font-size:17px;font-weight:600;flex:1}
+  .head h2{margin:0;font-size:17px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .acts{display:flex;align-items:center;gap:8px}
   h3{margin:22px 0 6px;font-size:13px;font-weight:500;color:var(--dim)}
   .note{margin:0;font-size:13px;color:var(--dim);line-height:1.45}
@@ -179,9 +260,44 @@
   .pickit span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px}
   .pickit small{flex:none;font-size:12px;color:var(--dim)}
   .pickit.on span{color:var(--live)}
+  .pickit.playing span::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--live);margin:0 8px 2px 0;vertical-align:middle}
   .pickit.busy span{animation:pulse 1s ease-in-out infinite}
   .del{flex:none;background:none;border:0;color:var(--dim);font-size:20px;padding:6px 4px 6px 14px}
   .pick.small{padding:12px;font-size:14px}
+
+  /* the playlists sheet: a card for each */
+  .plgrid{list-style:none;margin:14px 0 0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:18px 12px}
+  .plcard{position:relative;min-width:0}
+  .plcard .open{display:block;width:100%;padding:0;background:none;border:0;text-align:left}
+  .plcard .art{border-radius:12px}
+  .plcard b{display:block;margin-top:8px;font-size:15px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .plcard small{display:block;margin-top:2px;font-size:12px;color:var(--dim)}
+  .plcard .desc{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin-top:4px;
+                font-size:12px;line-height:1.4;color:var(--dim)}
+  .plcard.on .art{box-shadow:0 0 0 2px var(--live)}
+  .plcard.on b{color:var(--live)}
+  .plcard.playing b::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--live);margin:0 7px 2px 0;vertical-align:middle}
+  .plcard .more{position:absolute;top:6px;right:6px;width:32px;height:32px;padding:0;border:0;border-radius:50%;display:grid;place-items:center;
+                background:rgba(var(--ink-rgb),.72);color:var(--text);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+  .plcard .more svg{width:18px;height:18px;fill:currentColor}
+  .picking .plcard .more{display:none}
+  .picking .plcard .art{transition:opacity .15s}
+  .picking .plcard:not(.sel) .art{opacity:.55}
+  .picking .plcard.on .art{box-shadow:none}
+  .picking .plcard.sel .art{box-shadow:0 0 0 3px var(--live)}
+  .plcard.sel .art::after{content:"✓";position:absolute;top:8px;left:8px;width:26px;height:26px;border-radius:50%;
+                          display:grid;place-items:center;background:var(--live);color:var(--ink);font-size:15px;font-weight:700}
+  #plPickNote{margin-top:10px}
+
+  /* a playlist's About sheet */
+  .about{display:grid;grid-template-columns:116px 1fr;gap:14px;align-items:start;margin-top:12px}
+  .about .art{border-radius:12px}
+  .aboutside{display:flex;flex-direction:column;gap:8px;min-width:0}
+  .field{display:block;width:100%;font:inherit;font-size:16px;color:var(--text);background:var(--panel);border:1px solid var(--line);
+         border-radius:10px;padding:9px 12px;outline:none;-webkit-user-select:text;user-select:text}
+  .field:focus{border-color:var(--live)}
+  .field::placeholder{color:var(--dim)}
+  textarea.field{resize:vertical;min-height:100px;line-height:1.45}
 
   #eqCurve{display:block;width:100%;height:110px;margin:14px 0 0;border-radius:12px;background:var(--panel)}
   .presets{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 8px}
@@ -193,11 +309,171 @@
 
   .choices{display:grid;gap:8px;margin-top:6px}
 
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip small{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+  .chip.act small{color:inherit}
+  .chip.zero{opacity:.45}
+  .pick:disabled{color:var(--dim);cursor:default}
+  .pick:disabled:active{border-color:var(--line)}
+  #sortMake{margin-top:20px}
+  #vibeTitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #vibeNote{margin-top:12px}
+  .chips.each{margin-top:10px}
+
+  /* the theme sheet: Light, Medium and Dark side by side, each theme a little preview and its name */
+  .themes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 4px;max-width:640px;margin:10px -8px 0}
+  .tgroup{display:flex;flex-direction:column;gap:2px;min-width:0}
+  .tgroup h3{margin:6px 8px 8px;font-size:11px;letter-spacing:.12em;text-transform:uppercase}
+  .theme{display:flex;align-items:center;gap:9px;min-width:0;padding:7px 6px;border:0;border-radius:10px;
+         background:none;text-align:left;font-size:14px;color:var(--text)}
+  .theme span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .theme:active{background:var(--press)}
+  .theme[aria-checked=true]{background:var(--livebg)}
+  /* its background, a line of text, a quieter line, and the accent */
+  .sw{flex:none;position:relative;width:34px;height:22px;border-radius:6px;
+      background:radial-gradient(circle at right 8.5px top 11px,var(--sw-live) 3.6px,transparent 4.2px),var(--sw-bg);
+      box-shadow:inset 0 0 0 1px rgba(128,128,128,.28)}
+  .sw::before,.sw::after{content:"";position:absolute;left:6px;height:3px;border-radius:2px}
+  .sw::before{top:6px;width:calc(100% - 21px);background:var(--sw-text)}
+  .sw::after{top:13px;width:calc(100% - 26px);background:var(--sw-dim)}
+  /* narrow phones: a slimmer preview so "Deep Sea" still fits */
+  @media (max-width:380px){ .theme{gap:7px;padding:7px 5px} .sw{width:30px} }
+
+  /* settings: rows that open a page, and rows with a switch */
+  .rows{list-style:none;margin:0;padding:0}
+  .rows li{border-top:1px solid var(--line)}
+  .rows li:last-child{border-bottom:1px solid var(--line)}
+  .rowbtn{display:flex;align-items:center;gap:12px;width:100%;padding:12px 0;background:none;border:0;text-align:left;font-size:15px}
+  .rowbtn span{flex:1}
+  .rowbtn small{font-size:14px;color:var(--dim)}
+  .rowbtn::after{content:"›";font-size:20px;line-height:1;color:var(--dim)}
+  .rowsw{display:flex;align-items:center;gap:14px;padding:12px 0}
+  .rowsw span{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+  .rowsw b{font-size:15px;font-weight:500}
+  .rowsw small{font-size:12px;line-height:1.45;color:var(--dim)}
+  #setAbout{margin-top:18px}
+  /* the theme page slides in over the settings, and the app behind is dimmed less to show each theme on it */
+  .page.in{animation:pagein .22s ease}
+  .page.back{animation:pageback .22s ease}
+  @keyframes pagein{from{opacity:0;transform:translateX(32px)}}
+  @keyframes pageback{from{opacity:0;transform:translateX(-32px)}}
+  .sheet.open.peek .scrim{opacity:.3}
+
+  /* a song's details */
+  .songtop{display:flex;align-items:center;gap:14px;margin-top:12px}
+  .songtop .art{flex:none;width:84px;border-radius:10px}
+  .songname{display:flex;flex-direction:column;gap:3px;min-width:0}
+  .songname b{font-size:17px;font-weight:600;line-height:1.3;overflow-wrap:anywhere}
+  .songname span{font-size:14px;color:var(--dim)}
+  .songname small{font-size:12px;color:var(--live)}
+  .songname :empty{display:none}
+  #songMsg{margin-top:14px}
+  /* one label width for every section, so the values line up down the sheet */
+  .facts{display:grid;grid-template-columns:120px minmax(0,1fr);margin:0;font-size:14px;line-height:1.4}
+  .facts dt,.facts dd{margin:0;padding:8px 0;border-top:1px solid var(--line)}
+  .facts dt{padding-right:14px;color:var(--dim);overflow-wrap:anywhere}
+  .facts dd{overflow-wrap:anywhere;white-space:pre-line;-webkit-user-select:text;user-select:text}
+
+  /* ---- split view: on wide screens a second pane sits beside the songs ---- */
+  .split{flex:1;min-height:0;display:flex}
+  #mainPane{flex:1 1 0;min-width:0;min-height:0;display:flex;flex-direction:column}
+  #side,#splitBtn,.maintitle{display:none}
+  .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  @media (min-width:720px){
+    #splitBtn{display:grid}
+    #splitBtn[aria-pressed=true]{border-color:var(--live);color:var(--live)}
+    body.split #side{display:flex;flex-direction:column;flex:1 1 0;min-width:0;min-height:0;order:1;border-left:1px solid var(--line)}
+    /* the playlists go on the left, narrower, and stand in for the tabs */
+    body.split-lists #side{order:-1;flex:0 0 clamp(260px,34%,400px);border-left:0;border-right:1px solid var(--line)}
+    body.split-lists #tabrow{display:none}
+    body.split-lists .maintitle{display:block}
+    body.split .tab{max-width:30vw}
+  }
+  .maintitle{flex:none;margin:0 18px 2px;padding:0;background:none;border:0;text-align:left;font-size:19px;font-weight:600;
+             overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sidehead{display:flex;align-items:center;gap:8px;padding:0 18px 10px;flex:none}
+  .sidehead .seg{flex:1;min-width:0}
+  .sidehead .seg button{flex:1;justify-content:center;min-width:0;padding:5px 8px;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sidesec{flex:1;min-height:0;display:flex;flex-direction:column}
+  .sidebar{display:flex;align-items:center;gap:8px;padding:2px 18px 8px;flex:none;font-size:12px;color:var(--dim)}
+  .sidebar b{font-size:15px;font-weight:500;color:var(--text)}
+  .hint{flex:none;margin:0 18px 8px;font-size:12px}
+  .pickpl{position:relative;flex:none;min-width:0;max-width:62%}
+  .pickpl select{-webkit-appearance:none;appearance:none;display:block;max-width:100%;font:inherit;font-size:14px;color:var(--text);
+                 background:var(--panel);border:1px solid var(--line2);border-radius:99px;padding:6px 30px 6px 14px;
+                 overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+  .pickpl select:focus-visible{outline:none;border-color:var(--live)}
+  .pickpl::after{content:"";position:absolute;right:14px;top:50%;width:6px;height:6px;pointer-events:none;
+                 border:solid var(--dim);border-width:0 1.6px 1.6px 0;transform:translateY(-70%) rotate(45deg)}
+
+  /* the playlists pane: a row for each, with its covers */
+  .plrows{list-style:none;margin:0;padding:0 0 12px;flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+  .plrow .open{display:flex;align-items:center;gap:12px;width:100%;padding:8px 18px;background:none;border:0;border-top:1px solid var(--line);text-align:left}
+  .plrow .art{display:block;flex:none;width:48px;border-radius:8px}
+  .plrow .txt{display:flex;flex-direction:column;gap:2px;min-width:0}
+  .plrow b{font-size:15px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .plrow small{font-size:12px;color:var(--dim)}
+  .plrow.on .open{background:var(--panel)}
+  .plrow.on b{color:var(--live)}
+  .plrow.playing b::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--live);margin:0 7px 2px 0;vertical-align:middle}
+  .plrow.drop .open{background:var(--livebg);box-shadow:inset 0 0 0 2px var(--live)}
+
+  /* dragging a song to another playlist */
+  .grip{flex:none;align-self:center;display:grid;place-items:center;width:30px;height:30px;margin:-6px -8px -6px 0;padding:0;
+        background:none;border:0;border-radius:8px;color:var(--dim);cursor:grab;touch-action:none}
+  .grip svg{width:16px;height:16px;fill:currentColor}
+  .grip:hover{color:var(--text);background:var(--press)}
+  #list.covers .grip{position:absolute;top:6px;left:6px;margin:0;border-radius:50%;color:var(--text);
+                     background:rgba(var(--ink-rgb),.82);border:1px solid var(--line)}
+  body.dragging,body.dragging *{cursor:grabbing!important}
+  .dropzone{box-shadow:inset 0 0 0 2px var(--live)}
+  .ghost{position:fixed;left:0;top:0;z-index:30;pointer-events:none;max-width:280px;padding:8px 12px;border-radius:10px;
+         background:var(--raise);border:1px solid var(--line2);box-shadow:var(--shadow);font-size:14px;
+         white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ghost small{display:block;margin-top:2px;font-size:12px;color:var(--dim);overflow:hidden;text-overflow:ellipsis}
+  .ghost.ok{border-color:var(--live)}
+  .ghost.ok small{color:var(--live)}
+
+  /* now playing, with the lyrics */
+  /* scrolls as a whole when there are no lyrics and the cover is big; the lyrics scroll on their own */
+  .np{flex:1;min-height:0;display:flex;flex-direction:column;padding:0 18px;overflow-y:auto;overscroll-behavior:contain}
+  .nphead{flex:none;display:flex;flex-direction:column;align-items:center;gap:14px;padding:6px 0 4px;text-align:center}
+  .nphead .art{width:min(100%,300px,36vh);border-radius:14px;box-shadow:var(--shadow)}
+  .npmeta{display:flex;flex-direction:column;gap:3px;min-width:0;max-width:100%;background:none;border:0;padding:0;text-align:inherit}
+  .npmeta:disabled{cursor:default}
+  .npmeta b{font-size:19px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .npmeta span{font-size:13px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .npmeta span:empty{display:none}
+  .np.has-lyr .nphead{flex-direction:row;text-align:left}
+  .np.has-lyr .nphead .art{flex:none;width:76px;border-radius:10px}
+  .lyrbar{flex:none;display:flex;align-items:center;gap:8px;margin:14px 0 2px}
+  .lyrbar h3{margin:0}
+  .lyrbar small{flex:1;min-width:0;font-size:12px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .lyrics{position:relative;flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:14px 0 40%;
+          -webkit-mask-image:linear-gradient(transparent,#000 22px,#000 calc(100% - 56px),transparent);
+          mask-image:linear-gradient(transparent,#000 22px,#000 calc(100% - 56px),transparent)}
+  .lyrics:empty{display:none}
+  .lyrics p{margin:0;padding:5px 0;font-size:22px;line-height:1.3;font-weight:600;color:var(--dim)}
+  .lyrics.timed p{cursor:pointer;opacity:.6;transition:color .25s,opacity .25s}
+  .lyrics.timed p:hover{opacity:.85}
+  .lyrics.timed p.on{color:var(--text);opacity:1}
+  .lyrics .plain{white-space:pre-line;font-size:17px;line-height:1.6;color:var(--text)}
+  .lyrics .msg{font-size:14px;font-weight:400;color:var(--dim)}
+  .lyrnone{flex:none;display:flex;flex-direction:column;gap:12px;padding:10px 0 16px}
+  .lyrauto{display:flex;align-items:center;gap:12px;font-size:14px}
+  .lyrauto span{flex:1}
+  .note.fine{font-size:12px}
+  #lyrTitle{min-width:0}
+  #lyrText{min-height:42dvh;margin-top:12px;font-size:16px;line-height:1.5}
+
   @media (prefers-reduced-motion:reduce){
-    .panel,.scrim,.switch::after{transition:none}
+    .lyrics.timed p{transition:none}
+    .panel,.scrim,.switch::after,.picking .plcard .art{transition:none}
+    .page.in,.page.back{animation:none}
     .tile.busy svg,.ambname.busy b,.pickit.busy span{animation:none}
   }
 </style>
+<script src="themes.js"></script>
 </head>
 <body>
 
@@ -206,35 +482,91 @@
     <h1>Folder Player</h1>
     <span id="offline" class="pill" hidden></span>
     <button id="install" class="chip" hidden>Install</button>
+    <button id="splitBtn" class="chip icon" aria-label="Split view" title="Split view" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M12 4.5v15"/></svg></button>
+    <button id="setOpen" class="chip icon" aria-label="Settings" title="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
   </div>
   <p id="tip" class="tip" hidden>For offline use, tap <b>Share</b> then <b>Add to Home Screen</b>.<button id="tipX" class="x" aria-label="Dismiss">×</button></p>
 </header>
 
-<nav id="tabs" class="tabs" hidden aria-label="Playlists"></nav>
+<div id="split" class="split">
+<!-- the second pane, on wide screens: the song playing, the playlists, or another playlist -->
+<aside id="side" class="side" aria-label="Second pane">
+  <div class="sidehead">
+    <span id="sideSeg" class="seg" role="group" aria-label="Show in this pane">
+      <button data-mode="now" aria-pressed="false">Now playing</button>
+      <button data-mode="lists" aria-pressed="false">Playlists</button>
+      <button data-mode="two" aria-pressed="false">Two playlists</button>
+    </span>
+    <button id="sideX" class="chip icon" aria-label="Close split view" title="Close split view"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
 
+  <section id="sideNow" class="np" hidden>
+    <div class="nphead">
+      <div id="npArt" class="art none"></div>
+      <button id="npMeta" class="npmeta" title="Song details"><b id="npTitle"></b><span id="npArtist"></span><span id="npInfo"></span><span id="npFrom"></span></button>
+    </div>
+    <div id="lyrBar" class="lyrbar" hidden><h3>Lyrics</h3><small id="lyrSrc"></small><button id="lyrEdit" class="chip">Edit</button></div>
+    <div id="lyrics" class="lyrics"></div>
+    <div id="lyrNone" class="lyrnone" hidden>
+      <p id="lyrMsg" class="note"></p>
+      <div class="acts"><button id="lyrFind" class="chip">Find online</button><button id="lyrAdd" class="chip">Add by hand</button></div>
+      <div class="lyrauto"><span>Look up every song online</span><button id="lyrAuto" class="switch" role="switch" aria-checked="false" aria-label="Look up lyrics online for every song"></button></div>
+      <p class="note fine">Finding lyrics online sends the song's title and artist to lrclib.net, a free lyrics library. What it finds is kept on this device. Lyrics in the song's own file, or in an .lrc file with the same name picked along with it, are used first.</p>
+    </div>
+  </section>
+
+  <section id="sideLists" class="sidesec" hidden>
+    <div class="sidebar"><b class="grow">Playlists</b><button id="sideNew" class="chip">+ New</button></div>
+    <p class="note hint">Drag a song from the right onto a playlist to add it there.</p>
+    <ul id="sidePls" class="plrows"></ul>
+  </section>
+
+  <section id="sideTwo" class="sidesec" hidden>
+    <div class="sidebar"><label class="pickpl"><select id="sidePick" aria-label="Playlist in this pane"></select></label><span id="sideInfo" class="grow"></span></div>
+    <p class="note hint">Drag a song from one playlist into the other to add it there.</p>
+    <ul id="sideList"></ul>
+  </section>
+</aside>
+
+<main id="mainPane">
+<div id="tabrow" class="tabrow" hidden>
+  <button id="plAllBtn" class="tab all" hidden></button>
+  <nav id="tabs" class="tabs" aria-label="Playlists"></nav>
+</div>
+
+<button id="mainTitle" class="maintitle" title="About this playlist"></button>
 <div id="plbar" class="plbar" hidden>
-  <span id="plinfo"></span>
+  <button id="plinfo" title="About this playlist"></button>
+  <span id="viewSeg" class="seg" role="group" aria-label="Show songs as">
+    <button id="viewList" aria-label="List" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/></svg></button>
+    <button id="viewCovers" aria-label="Covers" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6.5v6.5H4zM13.5 4H20v6.5h-6.5zM4 13.5h6.5V20H4zM13.5 13.5H20V20h-6.5z"/></svg></button>
+  </span>
   <button id="plAdd" class="chip">Add</button>
   <button id="plRename" class="chip" hidden>Rename</button>
+  <button id="plExport" class="chip" hidden>Export</button>
   <button id="plDelete" class="chip danger" hidden>Delete</button>
   <button id="plEdit" class="chip">Edit</button>
 </div>
+<p id="plnote" class="plnote" role="button" tabindex="0" hidden></p>
 
 <section id="empty" class="empty">
   <p class="sub">Pick your tracks and they queue up in order. They're kept on this device as a playlist, so they're here next time. Pick playlist files (.m3u8) along with the songs and each becomes a playlist. Nothing uploads.</p>
   <button id="emptyFiles" class="pick">Choose music files</button>
-  <button id="emptyDir" class="pick">Choose a folder<small>Each folder, or each playlist file in it, becomes a playlist</small></button>
+  <button id="emptyDir" class="pick">Choose a folder<small>One playlist, or one for each folder in it. Playlist files in it become playlists.</small></button>
 </section>
 
-<input id="fFiles" type="file" accept="audio/*,.mp3,.m4a,.flac,.wav,.ogg,.aac,.m3u,.m3u8" multiple>
+<input id="fFiles" type="file" accept="audio/*,.mp3,.m4a,.flac,.wav,.ogg,.aac,.m3u,.m3u8,.lrc" multiple>
 <input id="fDir" type="file" webkitdirectory multiple>
+<input id="fList" type="file" accept=".m3u,.m3u8,audio/x-mpegurl,audio/mpegurl,application/vnd.apple.mpegurl" multiple>
 
 <div id="warn" class="warn" hidden></div>
 <ul id="list"></ul>
+</main>
+</div>
 
 <footer id="foot">
   <div id="music" hidden>
-    <div class="nowrow"><div class="now" id="now"></div><button id="eqOpen" class="chip">EQ</button></div>
+    <div class="nowrow"><button class="now" id="now" title="Song details"></button><button id="eqOpen" class="chip">EQ</button></div>
     <div class="time"><span id="cur">0:00</span><span id="dur">0:00</span></div>
     <input type="range" id="seek" value="0" min="0" max="1000" aria-label="Position">
     <div class="row">
@@ -244,6 +576,10 @@
       <button id="shuf">Shuffle</button>
     </div>
   </div>
+  <div id="vol" class="vol">
+    <button id="volMute" class="chip icon" aria-label="Mute" title="Mute"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5L6 9H2v6h4l5 4z"/><path class="w1" d="M15.5 8.5a5 5 0 0 1 0 7"/><path class="w2" d="M18.6 5.4a9.5 9.5 0 0 1 0 13.2"/><path class="mx" d="M16 9.5l5 5M21 9.5l-5 5"/></svg></button>
+    <input type="range" id="volume" min="0" max="100" aria-label="Volume">
+  </div>
   <div class="amb">
     <button id="ambOpen" class="ambname"><span>Ambience</span><b id="ambName">None</b></button>
     <input type="range" id="ambLevel" min="0" max="100" aria-label="Ambience volume">
@@ -252,6 +588,50 @@
 </footer>
 
 <div id="toast" class="toast" role="status" hidden></div>
+
+<div id="setSheet" class="sheet" hidden>
+  <div class="scrim" data-close></div>
+  <section class="panel" role="dialog" aria-label="Settings">
+    <div class="grab"></div>
+    <div id="setMain" class="page">
+      <div class="head"><h2>Settings</h2><button class="chip" data-close>Done</button></div>
+      <h3>Look</h3>
+      <ul class="rows">
+        <li><button id="setTheme" class="rowbtn"><i id="setSw" class="sw" aria-hidden="true"></i><span>Theme</span><small id="setThemeName"></small></button></li>
+      </ul>
+      <h3>Songs</h3>
+      <ul class="rows">
+        <li class="rowsw"><span><b>Show song details</b><small>Artist, album, format and bitrate from each file, under every song and in the player. Tap the song playing for everything its file says about it.</small></span><button id="setInfo" class="switch" role="switch" aria-checked="false" aria-label="Show song details"></button></li>
+      </ul>
+      <h3>Lyrics</h3>
+      <ul class="rows">
+        <li class="rowsw"><span><b>Look up every song online</b><small>Sends the song's title and artist to lrclib.net, a free lyrics library, when it has no lyrics of its own. What it finds is kept on this device.</small></span><button id="setLyr" class="switch" role="switch" aria-checked="false" aria-label="Look up lyrics online for every song"></button></li>
+      </ul>
+      <p id="setAbout" class="note fine"></p>
+    </div>
+    <div id="setThemes" class="page" hidden>
+      <div class="head">
+        <button id="themeBack" class="chip icon" aria-label="Back to Settings" title="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <h2>Theme</h2><button class="chip" data-close>Done</button>
+      </div>
+      <div id="themes" class="themes" role="radiogroup" aria-label="Theme"></div>
+    </div>
+  </section>
+</div>
+
+<div id="songSheet" class="sheet" hidden>
+  <div class="scrim" data-close></div>
+  <section class="panel" role="dialog" aria-label="Song details">
+    <div class="grab"></div>
+    <div class="head"><h2>Song details</h2><button class="chip" data-close>Done</button></div>
+    <div class="songtop">
+      <div id="songArt" class="art"></div>
+      <div class="songname"><b id="songTitle"></b><span id="songBy"></span><small id="songAudio"></small></div>
+    </div>
+    <p id="songMsg" class="note"></p>
+    <div id="songFacts"></div>
+  </section>
+</div>
 
 <div id="ambSheet" class="sheet" hidden>
   <div class="scrim" data-close></div>
@@ -289,12 +669,113 @@
     <div class="head"><h2>New playlist</h2><button class="chip" data-close>Cancel</button></div>
     <div class="choices">
       <button id="newFiles" class="pick">Choose music files</button>
-      <button id="newDir" class="pick">Choose a folder<small>Each folder, or each playlist file in it, becomes a playlist</small></button>
+      <button id="newDir" class="pick">Choose a folder<small>One playlist, or one for each folder in it. Pick it again later to add new songs.</small></button>
+      <button id="newList" class="pick">Open a playlist file<small>.m3u or .m3u8, using the songs already on this device</small></button>
+      <button id="newSort" class="pick">By vibe or genre<small>From the songs already on this device</small></button>
     </div>
   </section>
 </div>
 
+<div id="plSheet" class="sheet" hidden>
+  <div class="scrim" data-close></div>
+  <section class="panel" role="dialog" aria-label="Playlists">
+    <div class="grab"></div>
+    <div class="head">
+      <h2 id="plHead">Playlists</h2>
+      <span class="acts">
+        <button id="plPick" class="chip">Merge</button>
+        <button id="plNew" class="chip">+ New</button>
+        <button id="plDone" class="chip" data-close>Done</button>
+        <button id="plMerge" class="chip act" hidden disabled>Merge</button>
+        <button id="plCancel" class="chip" hidden>Cancel</button>
+      </span>
+    </div>
+    <p id="plPickNote" class="note" hidden>Tap the playlists to put together. They become one playlist, in the order shown here. No songs are deleted.</p>
+    <ul id="plAll" class="plgrid"></ul>
+  </section>
+</div>
+
+<div id="infoSheet" class="sheet" hidden>
+  <div class="scrim" data-close></div>
+  <section class="panel" role="dialog" aria-label="About this playlist">
+    <div class="grab"></div>
+    <div class="head"><h2>About this playlist</h2><button class="chip" data-close>Done</button></div>
+    <div class="about">
+      <div id="infoArt" class="art"></div>
+      <div class="aboutside">
+        <input id="infoName" class="field" maxlength="40" enterkeyhint="done" autocomplete="off" aria-label="Playlist name">
+        <p id="infoStats" class="note"></p>
+        <div class="acts"><button id="infoPlay" class="chip">Play</button><button id="infoShuf" class="chip">Shuffle</button></div>
+      </div>
+    </div>
+    <h3>Description</h3>
+    <textarea id="infoNote" class="field" rows="4" maxlength="2000" aria-label="Description"
+              placeholder="Write a bit about this playlist: the mood, when it's for, what's in it…"></textarea>
+    <div class="chips each">
+      <button id="infoExport" class="chip">Export</button>
+      <button id="infoDelete" class="chip danger">Delete</button>
+    </div>
+  </section>
+</div>
+
+<div id="foldSheet" class="sheet" hidden>
+  <div class="scrim" data-close></div>
+  <section class="panel" role="dialog" aria-label="Folders">
+    <div class="grab"></div>
+    <div class="head"><h2 id="foldTitle"></h2><button class="chip" data-close>Cancel</button></div>
+    <p class="sub">How should they go in?</p>
+    <div class="choices">
+      <button id="foldOne" class="pick">One playlist<small id="foldOneInfo"></small></button>
+      <button id="foldEach" class="pick">A playlist for each folder<small id="foldEachInfo"></small></button>
+    </div>
+  </section>
+</div>
+
+<div id="vibeSheet" class="sheet" hidden>
+  <div class="scrim" data-close></div>
+  <section class="panel" role="dialog" aria-label="Song vibe">
+    <div class="grab"></div>
+    <div class="head"><h2 id="vibeTitle"></h2><span class="acts"><button id="vibeMore" class="chip">Details</button><button class="chip" data-close>Done</button></span></div>
+    <p id="vibeInfo" class="sub"></p>
+    <h3>Vibe</h3>
+    <div id="vibeChips" class="chips"></div>
+    <p id="vibeNote" class="note"></p>
+    <button id="vibeAdd" class="pick small" hidden></button>
+  </section>
+</div>
+
+<div id="sortSheet" class="sheet" hidden>
+  <div class="scrim" data-close></div>
+  <section class="panel" role="dialog" aria-label="Playlists by vibe or genre">
+    <div class="grab"></div>
+    <div class="head"><h2>By vibe or genre</h2><button class="chip" data-close>Done</button></div>
+    <p id="sortNote" class="sub"></p>
+    <h3>Vibe</h3>
+    <div id="sortVibes" class="chips"></div>
+    <h3>Genre</h3>
+    <div id="sortGenres" class="chips"></div>
+    <p id="sortNoTags" class="note" hidden>Your songs have no genre tags. Add them in a tag editor, or keep each genre in a folder named after it (Jazz, Rock…) and choose that folder.</p>
+    <button id="sortMake" class="pick"></button>
+    <div class="chips each">
+      <button id="sortEachV" class="chip">A playlist for each vibe</button>
+      <button id="sortEachG" class="chip">A playlist for each genre</button>
+    </div>
+  </section>
+</div>
+
+<div id="lyrSheet" class="sheet" hidden>
+  <div class="scrim" data-close></div>
+  <section class="panel" role="dialog" aria-label="Lyrics">
+    <div class="grab"></div>
+    <div class="head"><h2 id="lyrTitle"></h2><span class="acts"><button class="chip" data-close>Cancel</button><button id="lyrSave" class="chip act">Save</button></span></div>
+    <p class="sub">Paste the words. Lines with times in front, like <b>[01:23.45]</b> (the LRC format), light up as the song plays.</p>
+    <textarea id="lyrText" class="field" rows="14" aria-label="Lyrics" spellcheck="false"></textarea>
+    <div class="chips each"><button id="lyrDel" class="chip danger">Remove lyrics</button></div>
+  </section>
+</div>
+
 <audio id="a"></audio>
+<script src="vibe.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

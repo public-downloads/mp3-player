@@ -1,9 +1,9 @@
 /* Folder Player service worker: keeps the app cached so it opens with no connection.
  * Cached files are served first; when online, each request also refreshes the cache
  * in the background, so updates you push show up on the next launch. */
-const CACHE = 'folder-player-v4';
+const CACHE = 'folder-player-v9';
 const SHELL = [
-  './', './index.html', './app.js', './synth.js', './manifest.webmanifest',
+  './', './index.html', './themes.js', './app.js', './synth.js', './vibe.js', './manifest.webmanifest',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png',
   './icons/icon-maskable-512.png', './icons/apple-touch-icon.png',
 ];
