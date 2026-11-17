@@ -2140,13 +2140,17 @@ function setShowInfo(on) {
 }
 
 // ---------- sheets, picking, install ----------
+// A sheet opened again while it's still sliding shut stays open (the drop window can do that as files
+// are dragged out of the app and back in).
+const hiding = new Map();  // sheet → the timer that hides it once it's slid shut
 function openSheet(id) {
   const s = $(id);
+  clearTimeout(hiding.get(s));
   s.hidden = false;
   requestAnimationFrame(() => requestAnimationFrame(() => s.classList.add('open')));
 }
 const closers = {};  // sheet id → what to do as it closes
-function closeSheet(s) { s.classList.remove('open'); setTimeout(() => s.hidden = true, 260); closers[s.id]?.(); }
+function closeSheet(s) { s.classList.remove('open'); hiding.set(s, setTimeout(() => s.hidden = true, 260)); closers[s.id]?.(); }
 for (const s of document.querySelectorAll('.sheet'))
   s.addEventListener('click', e => { if (e.target.closest('[data-close]')) closeSheet(s); });
 closers.infoSheet = () => { saveInfo(); infoPl = null; };
@@ -2231,7 +2235,7 @@ let pickTarget = null;
 function pickMusic(target) {
   pickTarget = target;
   const have = library().length > 0;
-  if (target || !(folderOK || have)) return $('fFiles').click();
+  if (target || !(folderOK || dropShown || have)) return $('fFiles').click();
   $('newList').hidden = $('newSort').hidden = !have;
   openSheet('newSheet');
 }
@@ -2250,6 +2254,151 @@ $('newSort').onclick = () => { closeSheet($('newSheet')); openSort(); };
 $('emptyFiles').onclick = () => { pickTarget = null; $('fFiles').click(); };
 $('emptyDir').onclick = () => { pickTarget = null; $('fDir').click(); };
 $('emptyDir').hidden = $('newDir').hidden = !folderOK;
+
+// ---------- the drop window ----------
+// Songs, folders and playlist files dragged in from anywhere (Explorer, Finder, the desktop), as many times
+// as you like, wait in a list and are added together. That's how songs from several folders go in at once,
+// which the folder picker can't do: it takes one folder. Files dragged onto the app open the window, and
+// it closes again if they're dragged back out without dropping. Its Choose buttons add to the same list.
+// Phones can't drag files in, so it's offered where there's a mouse or trackpad, and on iPads.
+const dropShown = matchMedia('(any-pointer: fine)').matches || (isIOS && Math.min(screen.width, screen.height) >= 600);
+let dropped = [];     // [{name, folder, files}]: a folder each, and the loose files of each drop together
+let dropKeys = new Set();  // every file in the list, so one dropped twice goes in once
+let dropBusy = 0, dropSeen = 0, dropGen = 0, dropAuto = false;  // reads under way, files read, list generation
+const fileKey = f => (f.webkitRelativePath || f.name) + '|' + f.size + '|' + f.lastModified;
+const usable = f => !f.name.startsWith('.') && (isAudio(f) || isPlaylistFile(f) || isLrc(f));
+
+function openDrop() { paintDrop(); openSheet('dropSheet'); }
+function clearDrop() { dropped = []; dropKeys = new Set(); dropBusy = dropSeen = 0; dropGen++; paintDrop(); }
+closers.dropSheet = () => { clearDrop(); dropAuto = false; };
+
+// Everything in a dropped file or folder, folders read all the way down, leaving out hidden ones (.git,
+// macOS's ._song.mp3). Each file gets the path a folder pick would give it (Rock/Album/song.mp3), so its
+// folders can become playlists.
+function entryFiles(entry) {
+  if (entry.name.startsWith('.')) return Promise.resolve([]);
+  if (entry.isFile) return new Promise(ok => entry.file(f => {
+    Object.defineProperty(f, 'webkitRelativePath', { value: entry.fullPath.replace(/^\/+/, ''), configurable: true });
+    if (++dropSeen % 25 === 0) paintDrop();
+    ok([f]);
+  }, () => ok([])));
+  if (!entry.isDirectory) return Promise.resolve([]);
+  const reader = entry.createReader(), kids = [];
+  return new Promise(ok => {
+    // readEntries hands them over in batches (100 at a time in Chrome) until it returns none
+    const next = () => reader.readEntries(batch => batch.length ? (kids.push(...batch), next()) : ok(kids), () => ok(kids));
+    next();
+  }).then(async all => (await Promise.all(all.map(entryFiles))).flat());
+}
+
+// A drop's folders and files. The entries have to be taken before the drop event ends, so this reads
+// them before its first await. Browsers that can't read folders hand over just the loose files.
+function takeDrop(dt) {
+  const entries = [...(dt.items || [])].filter(i => i.kind === 'file').map(i => i.webkitGetAsEntry?.()).filter(Boolean);
+  if (!entries.length) return collect([{ name: '', folder: false, files: Promise.resolve([...dt.files]) }]);
+  collect(entries.filter(e => e.isDirectory).map(e => ({ name: e.name, folder: true, files: entryFiles(e) }))
+    .concat({ name: '', folder: false, files: Promise.all(entries.filter(e => !e.isDirectory).map(entryFiles)).then(f => f.flat()) }));
+}
+
+// Adds what was dropped or chosen ([{name, folder, files: a promise of them}]) to the list, leaving out
+// files that are neither songs, playlist files nor lyrics, and ones already in it.
+async function collect(groups) {
+  if ($('dropSheet').hidden || !$('dropSheet').classList.contains('open')) openDrop();
+  const gen = dropGen;
+  dropBusy++; paintDrop();
+  const got = await Promise.all(groups.map(async g => ({ ...g, files: await g.files.catch(() => []) })));
+  if (gen !== dropGen) return;  // the window was closed meanwhile
+  dropBusy--;
+  let any = 0, added = 0;
+  for (const g of got) {
+    const ok = g.files.filter(usable), fresh = ok.filter(f => !dropKeys.has(fileKey(f)));
+    any += ok.length; added += fresh.length;
+    if (!fresh.length) continue;
+    for (const f of fresh) dropKeys.add(fileKey(f));
+    dropped.push({ name: g.name, folder: g.folder, files: fresh });
+  }
+  paintDrop();
+  if (!added) toast(any ? 'Those are already in the list.' : 'No songs, playlist files or lyrics in that.');
+}
+
+const FOLDER = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l2 2.2h8.4A1.5 1.5 0 0 1 21 8.7v9.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/></svg>';
+const NOTE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></svg>';
+function paintDrop() {
+  const count = (files, test) => files.filter(test).length;
+  const what = files => [[isAudio, 'song'], [isPlaylistFile, 'playlist file'], [isLrc, 'lyrics file']]
+    .map(([test, word]) => count(files, test) && plural(count(files, test), word)).filter(Boolean).join(' · ');
+  const ul = $('dropList');
+  ul.textContent = '';
+  for (const it of dropped) {
+    const li = document.createElement('li');
+    li.innerHTML = '<span class="pickit">' + (it.folder ? FOLDER : NOTE) + '<span></span><small></small></span><button class="del">×</button>';
+    const names = it.files.map(f => f.name);
+    const label = it.folder ? it.name : names.slice(0, 2).join(', ') + (names.length > 2 ? ` and ${names.length - 2} more` : '');
+    li.querySelector('span span').textContent = label;
+    li.querySelector('small').textContent = what(it.files);
+    const x = li.querySelector('.del');
+    x.setAttribute('aria-label', 'Take ' + label + ' out of the list');
+    x.onclick = () => {
+      dropped = dropped.filter(d => d !== it);
+      for (const f of it.files) dropKeys.delete(fileKey(f));
+      paintDrop();
+    };
+    ul.appendChild(li);
+  }
+  const all = dropped.flatMap(d => d.files), songs = count(all, isAudio);
+  $('dropMsg').textContent = dropBusy ? `Reading… ${plural(dropSeen, 'file')}` : dropped.length ? 'Drop more here' : 'Drop them here';
+  $('dropZone').classList.toggle('busy', dropBusy > 0);
+  const add = $('dropAdd');
+  add.disabled = dropBusy > 0 || !all.length;
+  add.textContent = songs ? 'Add ' + plural(songs, 'song') : 'Add';
+}
+
+$('dropAdd').onclick = () => {
+  const files = dropped.flatMap(d => d.files);
+  closeSheet($('dropSheet'));  // which empties the list
+  if (files.length) addFiles(files, null).catch(() => toast("Couldn't read those files."));
+};
+$('emptyDrop').onclick = $('newDrop').onclick = () => { const s = $('newSheet'); if (!s.hidden) closeSheet(s); openDrop(); };
+$('emptyDrop').hidden = $('newDrop').hidden = !dropShown;
+$('dropFiles').onclick = () => $('dFiles').click();
+$('dropDir').onclick = () => $('dDir').click();
+$('dropDir').hidden = !folderOK;
+$('dFiles').onchange = $('dDir').onchange = e => {
+  const files = [...e.target.files], folder = e.target === $('dDir');
+  e.target.value = '';
+  if (files.length) collect([{ name: folder ? files[0].webkitRelativePath.split('/')[0] : '', folder, files: Promise.resolve(files) }]);
+};
+
+// Files dragged over the app (not songs dragged between playlists, which aren't files). Without this, a
+// file dropped on the page would open in the browser in place of the app.
+let dragDepth = 0;
+const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+function filesOver(on) {
+  $('dropZone').classList.toggle('over', on);
+  if (on && $('dropSheet').hidden) { dropAuto = true; openDrop(); }
+  // dragged back out without dropping: close the window if dragging opened it and it's still empty
+  if (!on && dropAuto && !dropped.length && !dropBusy) closeSheet($('dropSheet'));
+}
+addEventListener('dragenter', e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  if (dragDepth++ === 0) filesOver(true);
+});
+addEventListener('dragover', e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+});
+addEventListener('dragleave', e => {
+  if (hasFiles(e) && --dragDepth <= 0) { dragDepth = 0; filesOver(false); }
+});
+addEventListener('drop', e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth = 0; dropAuto = false;
+  $('dropZone').classList.remove('over');
+  takeDrop(e.dataTransfer);
+});
 $('plAdd').onclick = () => pickMusic(view);
 $('plEdit').onclick = () => { editing = !editing; render(); };
 $('plRename').onclick = () => mode('lists') ? openInfo(view) : renamePl(view);  // no tabs to type in then

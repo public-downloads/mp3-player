@@ -309,6 +309,23 @@
 
   .choices{display:grid;gap:8px;margin-top:6px}
 
+  /* the drop window: songs and folders dragged in from anywhere, gathered in a list, then added together.
+     It sits over any other sheet (files can be dragged in while one is open), and the folders question over it. */
+  #dropSheet{z-index:11}
+  #foldSheet{z-index:12}
+  .dropzone{display:flex;flex-direction:column;align-items:center;gap:5px;margin-top:14px;padding:26px 16px;
+            border:2px dashed var(--line2);border-radius:14px;background:var(--panel);text-align:center;
+            transition:border-color .15s,background .15s}
+  .dropzone svg{width:30px;height:30px;margin-bottom:4px;fill:none;stroke:var(--dim);stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+  .dropzone b{font-size:15px;font-weight:500}
+  .dropzone small{font-size:12px;color:var(--dim);line-height:1.45}
+  .dropzone.over{border-color:var(--live);background:var(--livebg)}
+  .dropzone.over svg{stroke:var(--live)}
+  .dropzone.busy svg{animation:pulse 1s ease-in-out infinite}
+  #dropList{margin-top:14px}
+  #dropList .pickit{cursor:default}
+  #dropList svg{flex:none;align-self:center;width:16px;height:16px;fill:none;stroke:var(--dim);stroke-width:1.7;stroke-linejoin:round}
+
   .chips{display:flex;flex-wrap:wrap;gap:6px}
   .chip small{font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
   .chip.act small{color:inherit}
@@ -553,11 +570,14 @@
   <p class="sub">Pick your tracks and they queue up in order. They're kept on this device as a playlist, so they're here next time. Pick playlist files (.m3u8) along with the songs and each becomes a playlist. Nothing uploads.</p>
   <button id="emptyFiles" class="pick">Choose music files</button>
   <button id="emptyDir" class="pick">Choose a folder<small>One playlist, or one for each folder in it. Playlist files in it become playlists.</small></button>
+  <button id="emptyDrop" class="pick" hidden>Drop files or folders<small>Several folders at once, from different places. Or drag them straight onto the app.</small></button>
 </section>
 
 <input id="fFiles" type="file" accept="audio/*,.mp3,.m4a,.flac,.wav,.ogg,.aac,.m3u,.m3u8,.lrc" multiple>
 <input id="fDir" type="file" webkitdirectory multiple>
 <input id="fList" type="file" accept=".m3u,.m3u8,audio/x-mpegurl,audio/mpegurl,application/vnd.apple.mpegurl" multiple>
+<input id="dFiles" type="file" accept="audio/*,.mp3,.m4a,.flac,.wav,.ogg,.aac,.m3u,.m3u8,.lrc" multiple>
+<input id="dDir" type="file" webkitdirectory multiple>
 
 <div id="warn" class="warn" hidden></div>
 <ul id="list"></ul>
@@ -670,9 +690,27 @@
     <div class="choices">
       <button id="newFiles" class="pick">Choose music files</button>
       <button id="newDir" class="pick">Choose a folder<small>One playlist, or one for each folder in it. Pick it again later to add new songs.</small></button>
+      <button id="newDrop" class="pick" hidden>Drop files or folders<small>Several folders at once, from different places</small></button>
       <button id="newList" class="pick">Open a playlist file<small>.m3u or .m3u8, using the songs already on this device</small></button>
       <button id="newSort" class="pick">By vibe or genre<small>From the songs already on this device</small></button>
     </div>
+  </section>
+</div>
+
+<div id="dropSheet" class="sheet" hidden>
+  <div class="scrim" data-close></div>
+  <section class="panel" role="dialog" aria-label="Drop files or folders">
+    <div class="grab"></div>
+    <div class="head"><h2>Drop files or folders</h2><button class="chip" data-close>Cancel</button></div>
+    <p class="sub">Drag in songs, folders and playlist files, from as many places as you like. They wait here until you tap Add, then go in together.</p>
+    <div id="dropZone" class="dropzone">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+      <b id="dropMsg">Drop them here</b>
+      <small>A folder brings everything in it, the folders inside too.</small>
+    </div>
+    <div class="chips each"><button id="dropFiles" class="chip">Choose files</button><button id="dropDir" class="chip">Choose a folder</button></div>
+    <ul id="dropList" class="mine"></ul>
+    <button id="dropAdd" class="pick" disabled>Add</button>
   </section>
 </div>
 
